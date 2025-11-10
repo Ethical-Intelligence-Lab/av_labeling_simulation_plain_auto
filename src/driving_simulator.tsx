@@ -3,6 +3,10 @@ import * as THREE from 'three';
 // Let TypeScript know Qualtrics exists globally
 declare const Qualtrics: any;
 
+const AUTOPILOT_BLIND_DISTANCE = 1000; // Units before the finish where autopilot goes blind
+const TRACK_LENGTH = 8000; // Total distance from start to finish line in world units
+const MANUAL_MAX_VELOCITY = 0.625; // 75 MPH for manual driving (carVelocity units)
+
 interface ModeBySecond {
   second: number;
   mode: string;
@@ -40,11 +44,13 @@ const DrivingSimulator = () => {
   const [gameStarted, setGameStarted] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [speed, setSpeed] = useState(0);
+  const [progress, setProgress] = useState(0);
   const isCompleteRef = useRef(false);
   const gameStartedRef = useRef(false);
   const startTimeRef = useRef<number | null>(null);
   const autopilotRef = useRef(false);
   const autopilotPendingRef = useRef(false);
+  const progressRef = useRef(0);
   const scoreRef = useRef(1000);
   const flashTimeoutRef = useRef<number | null>(null);
   const countdownIntervalRef = useRef<number | null>(null);
@@ -61,6 +67,8 @@ const DrivingSimulator = () => {
     autopilotRef.current = false;
     autopilotPendingRef.current = false;
     setAutopilotPending(false);
+    progressRef.current = 0;
+    setProgress(0);
     
     // Start countdown
     let count = 3;
@@ -87,17 +95,18 @@ const DrivingSimulator = () => {
 
   const handleToggleAutopilot = () => {
     if (isAutopilot || autopilotPendingRef.current) {
-      // Cancel autopilot or any pending activation
       setIsAutopilot(false);
       autopilotRef.current = false;
       autopilotPendingRef.current = false;
       setAutopilotPending(false);
     } else {
-      // Queue autopilot activation until the path ahead is clear
       autopilotPendingRef.current = true;
       setAutopilotPending(true);
     }
   };
+
+  const blindProgressThreshold = 1 - (AUTOPILOT_BLIND_DISTANCE / TRACK_LENGTH);
+  const inBlindZone = progress >= blindProgressThreshold;
 
   useEffect(() => {
     autopilotRef.current = isAutopilot;
@@ -278,11 +287,15 @@ const DrivingSimulator = () => {
 
     // White blocks - spawn throughout the game
     const finalBlocks: THREE.Mesh[] = [];
-    const blockSpawnInterval = 3; // Spawn blocks every 3 seconds
-    let lastBlockSpawnTime = 0;
+    const baseBlockSpawnDistance = 140; // Units travelled between regular spawns early in the race
+    const lateBlockSpawnDistance = 70;   // Units between late-race spawns as density rises
+    const finishBurstSpawnDistance = 30; // Units between finish-line bursts
+    let lastBlockSpawnZ = carGroup.position.z;
+    let lastLateBlockSpawnZ = carGroup.position.z;
+    let lastFinishBurstSpawnZ = carGroup.position.z;
 
     // Finish line (static)
-    const finishLineZ = -7000;
+    const finishLineZ = -TRACK_LENGTH;
     const finishLine = new THREE.Mesh(
       new THREE.PlaneGeometry(8, 2),
       new THREE.MeshBasicMaterial({ color: 0xffff00 })
@@ -418,22 +431,25 @@ const DrivingSimulator = () => {
         return;
       }
 
-      // Don't spawn blocks after finish line is crossed
-      if (finishLineCrossed) {
-        // Skip all block spawning
-      } else if (elapsed >= 5 && elapsed < 80) {
-        // Check if it's time to spawn blocks (every 3 seconds)
-        const secondsSinceLastSpawn = elapsed - lastBlockSpawnTime;
-        if (secondsSinceLastSpawn >= blockSpawnInterval) {
-          lastBlockSpawnTime = elapsed;
-          const spawnDistance = 80;
-          // Density increases marginally every 10 seconds: base 3, +1 every 10 seconds
-          const densityMultiplier = Math.floor(elapsed / 10);
-          const blocksToSpawn = 3 + densityMultiplier; // Starts at 3, increases over time
-          
-          // Spawn blocks with varied spacing to avoid visible clusters
-          let cumulativeDistance = 0;
-          for (let i = 0; i < blocksToSpawn; i++) {
+      const distanceTravelled = Math.abs(carGroup.position.z);
+      const trackLength = TRACK_LENGTH;
+      const progressRatio = Math.min(distanceTravelled / trackLength, 1);
+      const densityLevel = Math.min(Math.floor(progressRatio * 10), 10);
+      const distanceToFinish = carGroup.position.z - finishLineZ;
+
+      if (Math.abs(progressRatio - progressRef.current) > 0.005) {
+        progressRef.current = progressRatio;
+        setProgress(progressRatio);
+      }
+
+      if (!finishLineCrossed && elapsed >= 0) {
+        if (distanceToFinish > AUTOPILOT_BLIND_DISTANCE) {
+          const distanceSinceLastSpawn = Math.abs(carGroup.position.z - lastBlockSpawnZ);
+          const dynamicInterval = Math.max(55, baseBlockSpawnDistance - densityLevel * 7);
+          if (distanceTravelled > 80 && distanceSinceLastSpawn >= dynamicInterval) {
+            lastBlockSpawnZ = carGroup.position.z;
+            const spawnDistance = 80;
+            const laneIndex = Math.floor(Math.random() * lanes.length);
             const block = new THREE.Mesh(
               new THREE.BoxGeometry(2, 2, 4),
               new THREE.MeshStandardMaterial({ 
@@ -444,29 +460,23 @@ const DrivingSimulator = () => {
                 emissiveIntensity: 0.3
               })
             );
-            // Vary spacing between blocks (3-6 units) to break up the pattern
-            const spacing = 3 + (Math.random() * 3);
-            cumulativeDistance += spacing;
-            block.position.set(0, 1, carGroup.position.z - spawnDistance - cumulativeDistance);
+            const offset = 3 + (Math.random() * 4);
+            block.position.set(lanes[laneIndex], 1, carGroup.position.z - spawnDistance - offset);
             block.castShadow = true;
             block.userData.isFinalBlock = true;
             scene.add(block);
             finalBlocks.push(block);
           }
         }
-      }
 
-      // End-game blocks (last 10s): same style as beginning, just denser, middle lane only
-      if (!finishLineCrossed && elapsed >= 80 && elapsed < 90 && elapsed >= 0) {
-        const secondsSinceLastSpawn = elapsed - lastBlockSpawnTime;
-        if (secondsSinceLastSpawn >= 1) { // spawn every second near the end
-          lastBlockSpawnTime = elapsed;
-          const spawnDistance = 70;
-          // Continue density increase: base 5, but also factor in the 10-second multiplier
-          const densityMultiplier = Math.floor(elapsed / 10);
-          const blocksToSpawn = 5 + densityMultiplier; // Continues density progression
-          let cumulativeDistance = 0;
-          for (let i = 0; i < blocksToSpawn; i++) {
+        if (distanceToFinish <= AUTOPILOT_BLIND_DISTANCE && distanceToFinish > 300) {
+          const distanceSinceLastLateSpawn = Math.abs(carGroup.position.z - lastLateBlockSpawnZ);
+          const dynamicLateInterval = Math.max(35, lateBlockSpawnDistance - densityLevel * 4);
+          if (distanceSinceLastLateSpawn >= dynamicLateInterval) {
+            lastLateBlockSpawnZ = carGroup.position.z;
+            const spawnDistance = 70;
+            const possibleLanes = [...lanes];
+            const laneIndex = Math.floor(Math.random() * possibleLanes.length);
             const block = new THREE.Mesh(
               new THREE.BoxGeometry(2, 2, 4),
               new THREE.MeshStandardMaterial({ 
@@ -477,10 +487,8 @@ const DrivingSimulator = () => {
                 emissiveIntensity: 0.35
               })
             );
-            // Vary spacing to avoid visible clusters (2-4 units)
-            const spacing = 2 + (Math.random() * 2);
-            cumulativeDistance += spacing;
-            block.position.set(0, 1, carGroup.position.z - spawnDistance - cumulativeDistance);
+            const offset = 3.5 + (Math.random() * 3.5);
+            block.position.set(possibleLanes[laneIndex], 1, carGroup.position.z - spawnDistance - offset);
             block.castShadow = true;
             block.userData.isFinalBlock = true;
             scene.add(block);
@@ -489,47 +497,38 @@ const DrivingSimulator = () => {
         }
       }
 
-      // Increased density blocks near finish line (geographic check)
-      const distanceToFinish = carGroup.position.z - finishLineZ;
       if (!finishLineCrossed && distanceToFinish > 0 && distanceToFinish < 300 && elapsed >= 0) {
-        // Spawn blocks periodically when near finish line
-        const secondsSinceLastSpawn = elapsed - lastBlockSpawnTime;
-        if (secondsSinceLastSpawn >= 1) { // Every second
-          lastBlockSpawnTime = elapsed;
+        const distanceSinceLastBurst = Math.abs(carGroup.position.z - lastFinishBurstSpawnZ);
+        const dynamicBurstInterval = Math.max(35, finishBurstSpawnDistance - densityLevel * 1.8);
+        if (distanceSinceLastBurst >= dynamicBurstInterval) {
+          lastFinishBurstSpawnZ = carGroup.position.z;
           const spawnDistance = 60;
-          
-          // Spawn blocks in random lanes, but never all 3 at once - always leave at least one lane clear
+
           const lanesToSpawn = [];
-          const numLanesToSpawn = Math.floor(Math.random() * 2) + 1; // 1 or 2 lanes (never 3)
+          const numLanesToSpawn = Math.random() < 0.2 ? 2 : 1;
           const shuffledLanes = [0, 1, 2].sort(() => Math.random() - 0.5);
-          
+
           for (let i = 0; i < numLanesToSpawn; i++) {
             lanesToSpawn.push(shuffledLanes[i]);
           }
-          
-          // Spawn 1-2 blocks per selected lane
+
           lanesToSpawn.forEach((laneIndex) => {
-            const blocksInThisLane = Math.floor(Math.random() * 2) + 1; // 1 or 2 blocks
-            let cumulativeDistance = 0;
-            for (let i = 0; i < blocksInThisLane; i++) {
-              const block = new THREE.Mesh(
-                new THREE.BoxGeometry(2, 2, 4),
-                new THREE.MeshStandardMaterial({ 
-                  color: 0xffffff,
-                  metalness: 0.5,
-                  roughness: 0.5,
-                  emissive: 0xffffff,
-                  emissiveIntensity: 0.4 // Slightly brighter near finish
-                })
-              );
-              const spacing = 4 + (Math.random() * 3);
-              cumulativeDistance += spacing;
-              block.position.set(lanes[laneIndex], 1, carGroup.position.z - spawnDistance - cumulativeDistance);
-              block.castShadow = true;
-              block.userData.isFinalBlock = true;
-              scene.add(block);
-              finalBlocks.push(block);
-            }
+            const block = new THREE.Mesh(
+              new THREE.BoxGeometry(2, 2, 4),
+              new THREE.MeshStandardMaterial({ 
+                color: 0xffffff,
+                metalness: 0.5,
+                roughness: 0.5,
+                emissive: 0xffffff,
+                emissiveIntensity: 0.4
+              })
+            );
+            const offset = 6 + (Math.random() * 4);
+            block.position.set(lanes[laneIndex], 1, carGroup.position.z - spawnDistance - offset);
+            block.castShadow = true;
+            block.userData.isFinalBlock = true;
+            scene.add(block);
+            finalBlocks.push(block);
           });
         }
       }
@@ -557,101 +556,128 @@ const DrivingSimulator = () => {
         wasAutopilot = true;
         autopilotTimer++;
         
+        const approachingFinish = !finishLineCrossed && distanceToFinish > 0 && distanceToFinish < AUTOPILOT_BLIND_DISTANCE;
+        const autopilotSpeed = 1.0; // 120 MPH equivalent
         const allObstacles: THREE.Mesh[] = [...otherCars, ...finalBlocks];
-        const laneInfo = [
-          { safe: true, nearestObstacle: Infinity },
-          { safe: true, nearestObstacle: Infinity },
-          { safe: true, nearestObstacle: Infinity }
-        ];
-        let emergencyStop = false;
-        
-        allObstacles.forEach(obstacle => {
-          const relativeZ = obstacle.position.z - carGroup.position.z;
-          if (relativeZ < 40 && relativeZ > -800) {
-            const obstacleX = obstacle.position.x;
-            const distance = Math.abs(relativeZ);
-            
-            if (distance < 40 && Math.abs(obstacleX - carGroup.position.x) < 1.5) {
-              emergencyStop = true;
-            }
-            
-            for (let i = 0; i < 3; i++) {
-              const laneCenterX = lanes[i];
-              const distanceFromLaneCenter = Math.abs(obstacleX - laneCenterX);
-              if (distanceFromLaneCenter < 0.6) {
-                if (distance < laneInfo[i].nearestObstacle) {
-                  laneInfo[i].nearestObstacle = distance;
-                }
-                if (distance < 350) {
-                  laneInfo[i].safe = false;
-                }
-              }
-            }
+
+        if (approachingFinish) {
+          // Blind mode near finish line – autopilot loses situational awareness and swerves unpredictably
+          if (autopilotTimer % 45 === 0) {
+            currentLaneIndex = Math.floor(Math.random() * lanes.length);
+            targetLane = lanes[currentLaneIndex];
           }
-        });
-        
-        let bestLane = currentLaneIndex;
-        let maxDistance = laneInfo[currentLaneIndex].nearestObstacle;
-        
-        for (let i = 0; i < 3; i++) {
-          if (laneInfo[i].nearestObstacle > maxDistance + 35) {
-            maxDistance = laneInfo[i].nearestObstacle;
-            bestLane = i;
-          }
-        }
-        
-        if (!laneInfo[currentLaneIndex].safe) {
-          for (let i = 0; i < 3; i++) {
-            if (laneInfo[i].safe && laneInfo[i].nearestObstacle > laneInfo[currentLaneIndex].nearestObstacle) {
-              bestLane = i;
-              maxDistance = laneInfo[i].nearestObstacle;
-            }
-          }
-        }
-        
-        for (let i = 0; i < 3; i++) {
-          if (laneInfo[i].nearestObstacle > laneInfo[bestLane].nearestObstacle) {
-            bestLane = i;
-          }
-        }
-        
-        if (laneInfo[bestLane].nearestObstacle > 450 && bestLane !== 1 && laneInfo[1].nearestObstacle > 450) {
-          if (autopilotTimer % 90 === 0) {
-            bestLane = 1;
-          }
-        }
-        
-        autopilotDecision = {
-          accelerate: true,
-          lane: bestLane,
-          targetSpeed: 1.5
-        };
-        
-        const bestLaneInfo = laneInfo[bestLane];
-        const shouldEmergencyBrake = emergencyStop || (!bestLaneInfo.safe && bestLaneInfo.nearestObstacle < 120);
-        
-        const autopilotSpeed = 1.0;
-        let immediateObstacleAhead = false;
-        allObstacles.forEach(obstacle => {
-          const relativeZ = obstacle.position.z - carGroup.position.z;
-          const relativeX = Math.abs(obstacle.position.x - carGroup.position.x);
-          if (relativeZ < 25 && relativeZ > -80 && relativeX < 1.3) {
-            immediateObstacleAhead = true;
-          }
-        });
-        
-        if (shouldEmergencyBrake) {
-          carVelocity = Math.max(carVelocity - 0.08, 0.15);
-        } else if (immediateObstacleAhead) {
-          carVelocity = Math.max(carVelocity - 0.05, 0.25);
-        } else {
+
+          // Add jittery lateral drift to mimic erratic corrections
+          const randomDrift = (Math.random() - 0.5) * 0.08;
+          carLaneOffset += randomDrift;
+          carLaneOffset = Math.max(Math.min(carLaneOffset, 2.5), -2.5);
+          autopilotDecision = {
+            accelerate: true,
+            lane: currentLaneIndex,
+            targetSpeed: 1.5
+          };
+
+          // Keep speed high; minimal braking so it blasts into finish blocks despite swerving
           if (carVelocity < autopilotSpeed) {
             carVelocity = Math.min(carVelocity + 0.05, autopilotSpeed);
           } else if (carVelocity > autopilotSpeed) {
-            carVelocity = Math.max(carVelocity - 0.08, autopilotSpeed);
+            carVelocity = Math.max(carVelocity - 0.05, autopilotSpeed);
+          }
+        } else {
+          const laneInfo = [
+            { safe: true, nearestObstacle: Infinity },
+            { safe: true, nearestObstacle: Infinity },
+            { safe: true, nearestObstacle: Infinity }
+          ];
+          let emergencyStop = false;
+
+          allObstacles.forEach(obstacle => {
+            const relativeZ = obstacle.position.z - carGroup.position.z;
+            if (relativeZ < 40 && relativeZ > -800) {
+              const obstacleX = obstacle.position.x;
+              const distance = Math.abs(relativeZ);
+
+              if (distance < 40 && Math.abs(obstacleX - carGroup.position.x) < 1.5) {
+                emergencyStop = true;
+              }
+
+              for (let i = 0; i < 3; i++) {
+                const laneCenterX = lanes[i];
+                const distanceFromLaneCenter = Math.abs(obstacleX - laneCenterX);
+                if (distanceFromLaneCenter < 0.6) {
+                  if (distance < laneInfo[i].nearestObstacle) {
+                    laneInfo[i].nearestObstacle = distance;
+                  }
+                  if (distance < 350) {
+                    laneInfo[i].safe = false;
+                  }
+                }
+              }
+            }
+          });
+
+          let bestLane = currentLaneIndex;
+          let maxDistance = laneInfo[currentLaneIndex].nearestObstacle;
+
+          for (let i = 0; i < 3; i++) {
+            if (laneInfo[i].nearestObstacle > maxDistance + 35) {
+              maxDistance = laneInfo[i].nearestObstacle;
+              bestLane = i;
+            }
+          }
+
+          if (!laneInfo[currentLaneIndex].safe) {
+            for (let i = 0; i < 3; i++) {
+              if (laneInfo[i].safe && laneInfo[i].nearestObstacle > laneInfo[currentLaneIndex].nearestObstacle) {
+                bestLane = i;
+                maxDistance = laneInfo[i].nearestObstacle;
+              }
+            }
+          }
+
+          for (let i = 0; i < 3; i++) {
+            if (laneInfo[i].nearestObstacle > laneInfo[bestLane].nearestObstacle) {
+              bestLane = i;
+            }
+          }
+
+          if (laneInfo[bestLane].nearestObstacle > 450 && bestLane !== 1 && laneInfo[1].nearestObstacle > 450) {
+            if (autopilotTimer % 90 === 0) {
+              bestLane = 1;
+            }
+          }
+
+          autopilotDecision = {
+            accelerate: true,
+            lane: bestLane,
+            targetSpeed: 1.5
+          };
+
+          const bestLaneInfo = laneInfo[bestLane];
+          const shouldEmergencyBrake = emergencyStop || (!bestLaneInfo.safe && bestLaneInfo.nearestObstacle < 120);
+
+          let immediateObstacleAhead = false;
+          allObstacles.forEach(obstacle => {
+            const relativeZ = obstacle.position.z - carGroup.position.z;
+            const relativeX = Math.abs(obstacle.position.x - carGroup.position.x);
+            if (relativeZ < 25 && relativeZ > -80 && relativeX < 1.3) {
+              immediateObstacleAhead = true;
+            }
+          });
+
+          if (shouldEmergencyBrake) {
+            carVelocity = Math.max(carVelocity - 0.08, 0.15);
+          } else if (immediateObstacleAhead) {
+            carVelocity = Math.max(carVelocity - 0.05, 0.25);
+          } else {
+            if (carVelocity < autopilotSpeed) {
+              carVelocity = Math.min(carVelocity + 0.05, autopilotSpeed);
+            } else if (carVelocity > autopilotSpeed) {
+              carVelocity = Math.max(carVelocity - 0.08, autopilotSpeed);
+            }
           }
         }
-        
+ 
         if (autopilotDecision.lane !== currentLaneIndex) {
           currentLaneIndex = autopilotDecision.lane;
           targetLane = lanes[currentLaneIndex];
@@ -661,18 +687,18 @@ const DrivingSimulator = () => {
         
         // When switching from autopilot to manual, cap speed immediately
         if (wasAutopilot) {
-          carVelocity = Math.min(carVelocity, 0.5); // Cap to manual max (60 MPH)
+          carVelocity = Math.min(carVelocity, MANUAL_MAX_VELOCITY); // Cap to manual max (75 MPH)
           wasAutopilot = false;
         }
         
         // Auto-accelerate in manual mode (car starts moving automatically)
-        if (carVelocity < 0.5) {
-          carVelocity = Math.min(carVelocity + 0.005, 0.5); // Gradual acceleration to max 60 MPH
+        if (carVelocity < MANUAL_MAX_VELOCITY) {
+          carVelocity = Math.min(carVelocity + 0.005, MANUAL_MAX_VELOCITY); // Gradual acceleration to max 75 MPH
         }
         
         // Player can accelerate further with W key
         if (keys.w) {
-          carVelocity = Math.min(carVelocity + 0.008, 0.5); // Max 60 MPH (0.5 carVelocity)
+          carVelocity = Math.min(carVelocity + 0.008, MANUAL_MAX_VELOCITY); // Max 75 MPH (0.625 carVelocity)
         }
         if (keys.s) {
           carVelocity = Math.max(carVelocity - 0.025, 0);
@@ -695,7 +721,7 @@ const DrivingSimulator = () => {
       carGroup.position.z -= carVelocity;
       
       // Calculate speed in MPH
-      // Manual: 0 to 60 MPH (carVelocity 0 to 0.5)
+      // Manual: 0 to 75 MPH (carVelocity 0 to 0.625)
       // Autopilot: constant 120 MPH (carVelocity 1.0)
       let speedMPH: number;
       if (autopilotRef.current) {
@@ -703,8 +729,8 @@ const DrivingSimulator = () => {
         speedMPH = Math.round(carVelocity * (120 / 1.0)); // 1.0 carVelocity = 120 MPH
         speedMPH = Math.min(120, speedMPH); // Cap at 120 MPH
       } else {
-        // Manual: 0 to 60 MPH (carVelocity 0 to 0.5)
-        speedMPH = Math.round(carVelocity * (60 / 0.5)); // 0.5 carVelocity = 60 MPH
+        // Manual: 0 to 75 MPH (carVelocity 0 to 0.625)
+        speedMPH = Math.round(carVelocity * (75 / MANUAL_MAX_VELOCITY)); // MANUAL_MAX_VELOCITY carVelocity = 75 MPH
       }
       setSpeed(speedMPH);
 
@@ -925,26 +951,26 @@ const DrivingSimulator = () => {
             left: '50%',
             transform: 'translateX(-50%)',
             display: 'flex',
-            gap: '20px',
+            gap: '16px',
             alignItems: 'center'
           }}>
             <div style={{
-              background: 'rgba(0, 0, 0, 0.7)',
+              background: 'rgba(0, 0, 0, 0.65)',
               color: 'white',
-              padding: '15px 30px',
-              borderRadius: '10px',
-              fontSize: '24px',
+              padding: '10px 20px',
+              borderRadius: '8px',
+              fontSize: '20px',
               fontFamily: 'monospace',
               fontWeight: 'bold'
             }}>
               {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}
             </div>
             <div style={{
-              background: scoreFlash ? '#ff0000' : 'rgba(0, 0, 0, 0.7)',
+              background: scoreFlash ? '#ff0000' : 'rgba(0, 0, 0, 0.65)',
               color: scoreFlash ? 'white' : (score > 500 ? '#44ff44' : score > 250 ? '#ffaa44' : '#ff4444'),
-              padding: '15px 30px',
-              borderRadius: '10px',
-              fontSize: '24px',
+              padding: '10px 20px',
+              borderRadius: '8px',
+              fontSize: '20px',
               fontFamily: 'monospace',
               fontWeight: 'bold',
               transition: 'background 0.1s, color 0.1s'
@@ -956,20 +982,56 @@ const DrivingSimulator = () => {
             position: 'absolute',
             top: '20px',
             right: '20px',
-            background: isAutopilot ? 'rgba(68, 255, 68, 0.3)' : 'rgba(0, 0, 0, 0.7)',
+            background: isAutopilot ? 'rgba(68, 255, 68, 0.25)' : 'rgba(0, 0, 0, 0.6)',
             color: isAutopilot ? '#44ff44' : '#ffffff',
-            padding: isAutopilot ? '20px 35px' : '15px 30px',
-            borderRadius: '10px',
-            fontSize: isAutopilot ? '32px' : '24px',
+            padding: isAutopilot ? '16px 24px' : '12px 20px',
+            borderRadius: '8px',
+            fontSize: isAutopilot ? '28px' : '20px',
             fontFamily: 'monospace',
             fontWeight: 'bold',
-            border: isAutopilot ? '3px solid #44ff44' : '2px solid #ffffff',
-            boxShadow: isAutopilot ? '0 0 20px rgba(68, 255, 68, 0.6)' : 'none',
+            border: isAutopilot ? '2px solid #44ff44' : '1px solid #ffffff',
+            boxShadow: isAutopilot ? '0 0 12px rgba(68, 255, 68, 0.45)' : 'none',
             animation: isAutopilot ? 'pulse 2s ease-in-out infinite' : 'none',
             transition: 'all 0.3s ease'
           }}>
             {speed} MPH
-            {isAutopilot && <div style={{ fontSize: '12px', marginTop: '5px', opacity: 0.8 }}>AUTOPILOT</div>}
+            {isAutopilot && <div style={{ fontSize: '11px', marginTop: '4px', opacity: 0.8 }}>AUTOPILOT</div>}
+          </div>
+          <div style={{
+            position: 'absolute',
+            top: '72px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            width: '52%',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px'
+          }}>
+            <div style={{
+              color: 'rgba(255, 255, 255, 0.8)',
+              fontSize: '13px',
+              fontFamily: 'Arial, sans-serif',
+              letterSpacing: '0.5px',
+              whiteSpace: 'nowrap'
+            }}>
+              Progress
+            </div>
+            <div style={{
+              flexGrow: 1,
+              height: '10px',
+              background: 'rgba(255, 255, 255, 0.2)',
+              borderRadius: '6px',
+              border: '1px solid rgba(255, 255, 255, 0.35)',
+              overflow: 'hidden',
+              boxShadow: '0 0 8px rgba(0, 0, 0, 0.2)'
+            }}>
+              <div style={{
+                width: `${Math.min(progress, 1) * 100}%`,
+                height: '100%',
+                background: inBlindZone ? 'linear-gradient(90deg, #ffaa44, #ff4444)' : 'linear-gradient(90deg, #44ff44, #22aaee)',
+                transition: 'width 0.2s ease-out, background 0.3s ease'
+              }} />
+            </div>
           </div>
           {isAutopilot && (
             <style>{`
