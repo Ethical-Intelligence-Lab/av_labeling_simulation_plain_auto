@@ -1115,24 +1115,25 @@ const DrivingSimulator = () => {
       {!isComplete && gameStarted && (
         <div style={{
           position: 'absolute',
-          bottom: '30px',
+          bottom: '200px', // Moved up from 30px to position right under the car
           left: '50%',
           transform: 'translateX(-50%)',
           textAlign: 'center'
         }}>
           <div style={{
-            minWidth: '220px',
+            minWidth: '320px', // Increased from 220px
             textAlign: 'center',
             background: 'rgba(68, 255, 68, 0.25)',
             color: '#44ff44',
-            padding: '12px 24px',
+            padding: '18px 36px', // Increased from 12px 24px
             borderRadius: '999px',
             fontFamily: 'Arial, sans-serif',
             fontWeight: 'bold',
+            fontSize: '20px', // Added larger font size
             border: '2px solid rgba(68, 255, 68, 0.6)',
             boxShadow: '0 0 12px rgba(68, 255, 68, 0.4)',
             transition: 'all 0.3s ease',
-            letterSpacing: '0.8px'
+            letterSpacing: '1.2px' // Increased from 0.8px
           }}>
             🤖 {labelCondition.toUpperCase()} ACTIVE
           </div>
@@ -1149,7 +1150,7 @@ const DrivingSimulator = () => {
           width: '95%',
           maxWidth: '700px',
           minHeight: '200px',
-          background: 'rgba(0, 0, 0, 0.6)',
+          background: 'rgba(0, 0, 0, 0.95)',
           backdropFilter: 'blur(10px)',
           borderRadius: '20px',
           padding: '50px',
