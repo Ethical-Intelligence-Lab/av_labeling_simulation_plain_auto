@@ -70,7 +70,7 @@ const DrivingSimulator = () => {
   const [autopilotPending, setAutopilotPending] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [isComplete, setIsComplete] = useState(false);
-  const [score, setScore] = useState(500);
+  const [score, setScore] = useState(1000);
   const [scoreFlash, setScoreFlash] = useState(false);
   const [showInstructions, setShowInstructions] = useState(true);
   const [gameStarted, setGameStarted] = useState(false);
@@ -84,7 +84,7 @@ const DrivingSimulator = () => {
   const autopilotRef = useRef(false);
   const autopilotPendingRef = useRef(false);
   const progressRef = useRef(0);
-  const scoreRef = useRef(500);
+  const scoreRef = useRef(1000);
   const failureLaneHitsRef = useRef(0);
   const lastDistanceUnitLoggedRef = useRef(-1);
   const blindLaneStateRef = useRef<{ index: number | null; prepopulated: boolean }>({
@@ -138,8 +138,8 @@ const DrivingSimulator = () => {
           gameStartedRef.current = true;
           setGameStarted(true);
           startTimeRef.current = Date.now();
-          scoreRef.current = 500;
-          setScore(500);
+          scoreRef.current = 1000;
+          setScore(1000);
           if (countdownIntervalRef.current) {
             clearInterval(countdownIntervalRef.current);
           }
@@ -332,12 +332,13 @@ const DrivingSimulator = () => {
 
     // White blocks - spawn throughout the game (reduced spawn rate for perfect avoidance)
     const finalBlocks: THREE.Mesh[] = [];
-    const baseBlockSpawnDistance = 200; // Units travelled between regular spawns early in the race (increased for less aggressive spawning)
-    const lateBlockSpawnDistance = 100;   // Units between late-race spawns as density rises
-    const finishBurstSpawnDistance = 50; // Units between finish-line bursts
+    const baseBlockSpawnDistance = 250; // Units travelled between regular spawns early in the race (increased for less risky spawning)
+    const lateBlockSpawnDistance = 120;   // Units between late-race spawns as density rises
+    const finishBurstSpawnDistance = 60; // Units between finish-line bursts
     let lastBlockSpawnZ = carGroup.position.z;
     let lastLateBlockSpawnZ = carGroup.position.z;
     let lastFinishBurstSpawnZ = carGroup.position.z;
+    let blockSpawnCount = 0; // Track spawn count for deterministic pattern
 
     // Finish line (static) - commented out
     // const finishLineZ = -TRACK_LENGTH;
@@ -362,7 +363,7 @@ const DrivingSimulator = () => {
     // No keyboard controls - always in Copilot mode
 
     // Timer - only start when game begins
-    // let lastScoreDeduction = 0; // Time-based score deduction removed
+    let lastScoreDeduction = 0;
     let lastSecondLogged = -1;
     
     const ensureModeByUnitComplete = () => {
@@ -444,16 +445,16 @@ const DrivingSimulator = () => {
         lastSecondLogged = elapsed;
       }
       
-      // Time-based score deduction removed - can be restored later if needed
-      // const now = Date.now();
-      // if (lastScoreDeduction === 0) {
-      //   lastScoreDeduction = now;
-      // }
-      // if (now - lastScoreDeduction >= 1000) {
-      //   scoreRef.current = Math.max(0, scoreRef.current - 5);
-      //   setScore(scoreRef.current);
-      //   lastScoreDeduction = now;
-      // }
+      // Time-based score deduction: -10 points per second
+      const now = Date.now();
+      if (lastScoreDeduction === 0) {
+        lastScoreDeduction = now;
+      }
+      if (now - lastScoreDeduction >= 1000) {
+        scoreRef.current = Math.max(0, scoreRef.current - 10);
+        setScore(scoreRef.current);
+        lastScoreDeduction = now;
+      }
       
       // Check for completion at 45 seconds
       if (elapsed >= 45 && !finishLineCrossed) {
@@ -497,23 +498,35 @@ const DrivingSimulator = () => {
 
     window.addEventListener('resize', handleResize);
  
-     // Animation
+     // Animation - Fixed timestep for determinism
      let autopilotTimer = 0;
      let autopilotDecision: AutopilotDecision = { accelerate: true, lane: 1, targetSpeed: 1.3 };
      let animationId: number | undefined;
      let frameCount = 0;
-    let lastAnimationTime = performance.now();
-    const FRAME_MS = 1000 / 60;
+     const FIXED_FPS = 60;
+     const FIXED_DELTA = 1 / FIXED_FPS; // Fixed timestep: 1/60 seconds
+     let accumulatedTime = 0;
+     let lastAnimationTime: number | null = null;
 
     const animate = () => {
       animationId = requestAnimationFrame(animate);
 
       const now = performance.now();
-      let deltaMs = now - lastAnimationTime;
-      const deltaFactor = Math.max(deltaMs / (1000 / 60), 0.0001);
-      const scaledDelta = Math.min(deltaFactor, 1);
+      if (lastAnimationTime === null) {
+        lastAnimationTime = now;
+        renderer.render(scene, camera);
+        return;
+      }
+      
+      const realDeltaMs = now - lastAnimationTime;
       lastAnimationTime = now;
-      frameCount += deltaFactor;
+      accumulatedTime += realDeltaMs / 1000; // Convert to seconds
+
+      // Process fixed timesteps
+      while (accumulatedTime >= FIXED_DELTA) {
+        const deltaFactor = 1.0; // Always 1.0 for fixed timestep
+        const scaledDelta = FIXED_DELTA; // Use fixed delta for per-second calculations
+        frameCount += 1;
 
       // Allow car movement even before game starts, but only run game logic after start
       const elapsed = startTimeRef.current && gameStartedRef.current 
@@ -573,14 +586,22 @@ const DrivingSimulator = () => {
       //   ... (blind zone block spawning logic)
       // }
 
-      // Block spawning - simplified without finish line logic
+      // Block spawning - simplified without finish line logic (deterministic pattern, less risky)
       if (!finishLineCrossed && elapsed >= 0) {
         const distanceSinceLastSpawn = Math.abs(carGroup.position.z - lastBlockSpawnZ);
-        const dynamicInterval = Math.max(55, baseBlockSpawnDistance - densityLevel * 7);
-        if (distanceTravelled > 80 && distanceSinceLastSpawn >= dynamicInterval) {
+        const dynamicInterval = Math.max(70, baseBlockSpawnDistance - densityLevel * 5); // Increased minimum, reduced density scaling
+        if (distanceTravelled > 100 && distanceSinceLastSpawn >= dynamicInterval) { // Increased from 80
           lastBlockSpawnZ = carGroup.position.z;
-          const spawnDistance = 80;
-          const laneIndex = Math.floor(Math.random() * lanes.length);
+          const spawnDistance = 100; // Increased from 80
+          
+          // Deterministic lane pattern: prefer outer lanes (less risky), cycle [0, 2, 1, 0, 2, 1, ...]
+          const lanePattern = [0, 2, 1]; // Avoid middle lane more
+          const laneIndex = lanePattern[blockSpawnCount % lanePattern.length];
+          
+          // Deterministic offset pattern: larger offsets for more spacing
+          const offsetPattern = [5, 7, 6, 8, 5.5, 7.5]; // Increased from [3, 5, 4, 6, 3.5, 5.5]
+          const offset = offsetPattern[blockSpawnCount % offsetPattern.length];
+          
           const block = new THREE.Mesh(
             new THREE.BoxGeometry(2, 2, 4),
             new THREE.MeshStandardMaterial({ 
@@ -591,12 +612,13 @@ const DrivingSimulator = () => {
               emissiveIntensity: 0.3
             })
           );
-          const offset = 3 + (Math.random() * 4);
           block.position.set(lanes[laneIndex], 1, carGroup.position.z - spawnDistance - offset);
           block.castShadow = true;
           block.userData.isFinalBlock = true;
           scene.add(block);
           finalBlocks.push(block);
+          
+          blockSpawnCount++; // Increment for next spawn
         }
       }
 
@@ -608,7 +630,7 @@ const DrivingSimulator = () => {
         autopilotRef.current = true;
         wasAutopilot = true;
         const previousAutopilotTimer = autopilotTimer;
-        autopilotTimer += deltaFactor;
+        autopilotTimer += FIXED_DELTA; // Fixed timestep: increment by 1/60 second per step
         const autopilotHit90Tick = Math.floor(previousAutopilotTimer / 90) !== Math.floor(autopilotTimer / 90);
         
         // const approachingFinish = !finishLineCrossed && distanceToFinish > 0 && distanceToFinish < AUTOPILOT_BLIND_DISTANCE; // Finish line removed
@@ -635,9 +657,9 @@ const DrivingSimulator = () => {
 
           // Keep speed high; minimal braking so it blasts into finish blocks deliberately
           if (carVelocity < autopilotSpeed) {
-            carVelocity = Math.min(carVelocity + 0.05 * scaledDelta, autopilotSpeed);
+            carVelocity = Math.min(carVelocity + 0.05 * 1.0, autopilotSpeed); // Fixed timestep: per-frame rate
           } else if (carVelocity > autopilotSpeed) {
-            carVelocity = Math.max(carVelocity - 0.05 * scaledDelta, autopilotSpeed);
+            carVelocity = Math.max(carVelocity - 0.05 * 1.0, autopilotSpeed); // Fixed timestep: per-frame rate
           }
         } else {
           const laneInfo = [
@@ -727,14 +749,14 @@ const DrivingSimulator = () => {
           });
 
           if (shouldEmergencyBrake) {
-            carVelocity = Math.max(carVelocity - 0.08 * scaledDelta, 0.15);
+            carVelocity = Math.max(carVelocity - 0.08 * 1.0, 0.15); // Fixed timestep: per-frame rate
           } else if (immediateObstacleAhead) {
-            carVelocity = Math.max(carVelocity - 0.05 * scaledDelta, 0.25);
+            carVelocity = Math.max(carVelocity - 0.05 * 1.0, 0.25); // Fixed timestep: per-frame rate
           } else {
             if (carVelocity < autopilotSpeed) {
-              carVelocity = Math.min(carVelocity + 0.05 * scaledDelta, autopilotSpeed);
+              carVelocity = Math.min(carVelocity + 0.05 * 1.0, autopilotSpeed); // Fixed timestep: per-frame rate
             } else if (carVelocity > autopilotSpeed) {
-              carVelocity = Math.max(carVelocity - 0.08 * scaledDelta, autopilotSpeed);
+              carVelocity = Math.max(carVelocity - 0.08 * 1.0, autopilotSpeed); // Fixed timestep: per-frame rate
             }
           }
         }
@@ -745,15 +767,16 @@ const DrivingSimulator = () => {
         }
       }
 
-      if (autopilotRef.current && deltaFactor > 5) {
-        carVelocity = AUTOPILOT_SPEED_UNITS;
-      }
+      // Large frame skip protection (not needed with fixed timestep, but keeping for safety)
+      // if (autopilotRef.current && scaledDelta > 5) {
+      //   carVelocity = AUTOPILOT_SPEED_UNITS;
+      // }
 
       const laneChangeEase = autopilotRef.current ? 0.2 : 0.1;
-      const laneChangeFactor = Math.min(laneChangeEase * scaledDelta, 1);
+      const laneChangeFactor = Math.min(laneChangeEase * 1.0, 1); // Fixed timestep: always 1.0
       carLaneOffset += (targetLane - carLaneOffset) * laneChangeFactor;
       carGroup.position.x = carLaneOffset;
-      carGroup.position.z -= carVelocity * deltaFactor;
+      carGroup.position.z -= carVelocity * 1.0; // Fixed timestep: carVelocity is already in units per 60fps frame
       
       // Calculate speed in MPH (shared conversion factor for manual and autopilot)
       let speedMPH: number;
@@ -767,7 +790,7 @@ const DrivingSimulator = () => {
       setSpeed(speedMPH);
 
       otherCars.forEach((car, index) => {
-        car.position.z += 0.03 * deltaFactor; // Even slower traffic
+        car.position.z += 0.03 * 1.0; // Even slower traffic (fixed timestep)
         
         // Respawn far behind with huge spacing
         if (car.position.z > carGroup.position.z + 150) {
@@ -874,11 +897,15 @@ const DrivingSimulator = () => {
         const timeSinceFinish = (Date.now() - finishLineCrossTime) / 1000;
         if (timeSinceFinish >= 5) {
           // Gradually slow down after 5 seconds of coasting
-          carVelocity = Math.max(0, carVelocity - 0.02 * scaledDelta);
+          carVelocity = Math.max(0, carVelocity - 0.02 * 1.0); // Fixed timestep: per-frame rate
         }
         // Otherwise, maintain current speed (coasting)
       }
 
+        accumulatedTime -= FIXED_DELTA;
+      } // End of fixed timestep loop
+
+      // Render at variable rate (visual only, doesn't affect determinism)
       renderer.render(scene, camera);
     };
 
@@ -956,14 +983,15 @@ const DrivingSimulator = () => {
               🚗 AEON {labelCondition} Simulation 🚗
             </h1>
             <p style={{ marginBottom: '15px' }}>
-              You are about to watch a <strong>driving simulation</strong>. <br></br>The vehicle will drive autonomously using AEON's {labelCondition} technology. <strong><br></br>You do not need to interact with the simulation</strong> — simply observe how {labelCondition} handles the driving.
+              You are about to watch a driving simulation of <strong>AEON {labelCondition}</strong>. <strong><br></br>You do not need to interact with the simulation</strong> — simply observe how {labelCondition} behaves, while you also receive <strong>smartphone notifications</strong>
             </p>
             <p style={{ marginBottom: '15px' }}>
-              The simulation will last <strong>45 seconds</strong>. During this time, you may see <strong>notifications</strong> appear on screen—these represent typical smartphone notifications that might appear while {labelCondition} is driving.
+              Your score starts at <strong>500 points</strong> and decreases by <strong>10 points</strong> for each second that passes or each obstacle the vehicle hits. The score is displayed in the top right during the simulation.
             </p>
             <p style={{ marginBottom: '15px' }}>
-              Your score starts at <strong>500 points</strong> and decreases by <strong>10 points</strong> for each obstacle the vehicle hits. The score is displayed in the top right during the simulation.
+              The simulation will last <strong>45 seconds</strong>. 
             </p>
+            
             <button
               onClick={startGame}
               style={{
@@ -1025,7 +1053,7 @@ const DrivingSimulator = () => {
             </div>
             <div style={{
               background: 'rgba(0, 0, 0, 0.65)',
-              color: (score > 250 ? '#44ff44' : score > 125 ? '#ffaa44' : '#ff4444'),
+              color: (score > 500 ? '#44ff44' : score > 250 ? '#ffaa44' : '#ff4444'),
               padding: '10px 20px',
               borderRadius: '8px',
               fontSize: '20px',
@@ -1121,7 +1149,7 @@ const DrivingSimulator = () => {
           width: '95%',
           maxWidth: '700px',
           minHeight: '200px',
-          background: 'rgba(0, 0, 0, 0.85)',
+          background: 'rgba(0, 0, 0, 0.6)',
           backdropFilter: 'blur(10px)',
           borderRadius: '20px',
           padding: '50px',
