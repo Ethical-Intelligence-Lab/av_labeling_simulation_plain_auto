@@ -12,12 +12,6 @@ const CAR_UNITS_TO_MPH = AUTOPILOT_MAX_MPH / AUTOPILOT_SPEED_UNITS;
 const MANUAL_MAX_VELOCITY = MANUAL_MAX_MPH / CAR_UNITS_TO_MPH;
 const labelCondition = 'Autopilot';
 
-// Notification timing (in seconds) - configurable
-const NOTIFICATION_1_TIME = 8;  // First notification at 8 seconds
-const NOTIFICATION_2_TIME = 20; // Second notification at 20 seconds
-const NOTIFICATION_3_TIME = 32; // Third notification at 32 seconds
-const NOTIFICATION_DURATION = 5; // How long each notification stays visible (seconds)
-
 interface ModeBySecond {
   second: number;
   mode: string;
@@ -55,15 +49,6 @@ interface CollisionEvent {
   isBlindLane?: boolean;
 }
 
-interface Notification {
-  id: number;
-  type: 'text' | 'news' | 'social';
-  title: string;
-  content: string;
-  icon?: string;
-  timestamp: number;
-}
-
 const DrivingSimulator = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [isAutopilot, setIsAutopilot] = useState(true); // Always in Copilot mode
@@ -71,13 +56,11 @@ const DrivingSimulator = () => {
   const [elapsedTime, setElapsedTime] = useState(0);
   const [isComplete, setIsComplete] = useState(false);
   const [score, setScore] = useState(1000);
-  const [scoreFlash, setScoreFlash] = useState(false);
   const [showInstructions, setShowInstructions] = useState(true);
   const [gameStarted, setGameStarted] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [speed, setSpeed] = useState(0);
   const [progress, setProgress] = useState(0);
-  const [activeNotification, setActiveNotification] = useState<Notification | null>(null);
   const isCompleteRef = useRef(false);
   const gameStartedRef = useRef(false);
   const startTimeRef = useRef<number | null>(null);
@@ -91,7 +74,6 @@ const DrivingSimulator = () => {
     index: null,
     prepopulated: false
   });
-  const flashTimeoutRef = useRef<number | null>(null);
   const countdownIntervalRef = useRef<number | null>(null);
   const simulationDataRef = useRef<SimulationData>({
     modeBySecond: [], // Track mode at each second
@@ -112,7 +94,6 @@ const DrivingSimulator = () => {
     progressRef.current = 0;
     setProgress(0);
     setElapsedTime(0);
-    setActiveNotification(null);
     failureLaneHitsRef.current = 0;
     lastDistanceUnitLoggedRef.current = -1;
     blindLaneStateRef.current = { index: null, prepopulated: false };
@@ -375,66 +356,11 @@ const DrivingSimulator = () => {
       lastDistanceUnitLoggedRef.current = TRACK_LENGTH;
     };
     
-    // Track which notifications have been shown
-    const notificationsShown = new Set<number>();
-    const notificationStartTimes = new Map<number, number>();
-    
     const timerInterval = setInterval(() => {
       if (!startTimeRef.current || !gameStartedRef.current || isCompleteRef.current) return;
       
       const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
       setElapsedTime(elapsed);
-      
-      // Check for notification triggers
-      const notificationTimes = [NOTIFICATION_1_TIME, NOTIFICATION_2_TIME, NOTIFICATION_3_TIME];
-      notificationTimes.forEach((notifTime, index) => {
-        if (elapsed === notifTime && !notificationsShown.has(index)) {
-          notificationsShown.add(index);
-          const notifId = index + 1;
-          
-          let notification: Notification;
-          if (notifId === 1) {
-            // Text message
-            notification = {
-              id: notifId,
-              type: 'text',
-              title: 'John',
-              content: 'Hey! Do you want anything from the store? I\'m heading there in a bit',
-              icon: '💬',
-              timestamp: Date.now()
-            };
-          } else if (notifId === 2) {
-            // News article
-            notification = {
-              id: notifId,
-              type: 'news',
-              title: 'Breaking News',
-              content: 'Tech stocks surge as AI adoption accelerates across industries',
-              icon: '📰',
-              timestamp: Date.now()
-            };
-          } else {
-            // Social media
-            notification = {
-              id: notifId,
-              type: 'social',
-              title: 'Instagram',
-              content: 'You have 5 new posts from people you follow',
-              icon: '📸',
-              timestamp: Date.now()
-            };
-          }
-          
-          setActiveNotification(notification);
-          notificationStartTimes.set(notifId, Date.now());
-          
-          // Auto-dismiss after duration
-          setTimeout(() => {
-            setActiveNotification(null);
-            notificationStartTimes.delete(notifId);
-          }, NOTIFICATION_DURATION * 1000);
-        }
-      });
       
       // Log mode at each second
       if (elapsed !== lastSecondLogged) {
@@ -869,9 +795,6 @@ const DrivingSimulator = () => {
                 simulationDataRef.current.failureLaneHits = failureLaneHitsRef.current;
               }
               
-              if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
-              setScoreFlash(true);
-              flashTimeoutRef.current = window.setTimeout(() => setScoreFlash(false), 300);
               
               collisionCooldown.set(blockKey, frameCount);
             }
@@ -918,7 +841,6 @@ const DrivingSimulator = () => {
       window.removeEventListener('resize', handleResize);
       clearInterval(timerInterval);
       if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
-      if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
       if (container && renderer.domElement && container.contains(renderer.domElement)) {
         container.removeChild(renderer.domElement);
       }
@@ -983,7 +905,7 @@ const DrivingSimulator = () => {
               🚗 AEON {labelCondition} Simulation 🚗
             </h1>
             <p style={{ marginBottom: '15px' }}>
-              You are about to watch a driving simulation of <strong>AEON {labelCondition}</strong>. <strong><br></br>You do not need to interact with the simulation</strong> — simply observe how {labelCondition} behaves, while you also receive <strong>smartphone notifications</strong>
+              You are about to watch a driving simulation of <strong>AEON {labelCondition}</strong>. <strong><br></br>You do not need to interact with the simulation</strong> — simply observe how {labelCondition} behaves.
             </p>
             <p style={{ marginBottom: '15px' }}>
               Your score starts at <strong>1000 points</strong> and decreases by <strong>10 points</strong> for each second that passes or each obstacle the vehicle hits. The score is displayed in the top right during the simulation.
@@ -1140,83 +1062,6 @@ const DrivingSimulator = () => {
         </div>
       )}
 
-      {/* Notification Overlay */}
-      {activeNotification && (
-        <div style={{
-          position: 'absolute',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          width: '95%',
-          maxWidth: '700px',
-          minHeight: '200px',
-          background: 'rgba(0, 0, 0, 0.95)',
-          backdropFilter: 'blur(10px)',
-          borderRadius: '20px',
-          padding: '50px',
-          zIndex: 2000,
-          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
-          border: '2px solid rgba(255, 255, 255, 0.2)',
-          animation: 'slideIn 0.3s ease-out'
-        }}>
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            marginBottom: '20px',
-            gap: '16px'
-          }}>
-            <div style={{ fontSize: '48px' }}>{activeNotification.icon}</div>
-            <div>
-              <div style={{
-                fontSize: '24px',
-                fontWeight: 'bold',
-                color: '#ffffff',
-                marginBottom: '6px'
-              }}>
-                {activeNotification.title}
-              </div>
-              <div style={{
-                fontSize: '14px',
-                color: 'rgba(255, 255, 255, 0.6)'
-              }}>
-                {activeNotification.type === 'text' ? 'Text Message' : 
-                 activeNotification.type === 'news' ? 'News Alert' : 
-                 'Social Media'}
-              </div>
-            </div>
-          </div>
-          <div style={{
-            fontSize: '20px',
-            color: 'rgba(255, 255, 255, 0.9)',
-            lineHeight: '1.6'
-          }}>
-            {activeNotification.content}
-          </div>
-          <div style={{
-            position: 'absolute',
-            top: '15px',
-            right: '15px',
-            fontSize: '28px',
-            color: 'rgba(255, 255, 255, 0.5)',
-            cursor: 'default'
-          }}>
-            📱
-          </div>
-        </div>
-      )}
-
-      <style>{`
-        @keyframes slideIn {
-          from {
-            opacity: 0;
-            transform: translate(-50%, -60%);
-          }
-          to {
-            opacity: 1;
-            transform: translate(-50%, -50%);
-          }
-        }
-      `}</style>
 
       {isComplete && (
         <div style={{
