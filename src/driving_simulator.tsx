@@ -75,6 +75,8 @@ const DrivingSimulator = () => {
     prepopulated: false
   });
   const countdownIntervalRef = useRef<number | null>(null);
+  const lastTabHiddenTimeRef = useRef<number | null>(null); // Track when tab was hidden
+  const lastScoreDeductionRef = useRef<number>(0); // Track last score deduction time
   const simulationDataRef = useRef<SimulationData>({
     modeBySecond: [], // Track mode at each second
     whiteBlocksHit: 0, // Count white block collisions
@@ -94,6 +96,7 @@ const DrivingSimulator = () => {
     progressRef.current = 0;
     setProgress(0);
     setElapsedTime(0);
+    lastScoreDeductionRef.current = 0; // Reset for new game
     failureLaneHitsRef.current = 0;
     lastDistanceUnitLoggedRef.current = -1;
     blindLaneStateRef.current = { index: null, prepopulated: false };
@@ -119,6 +122,7 @@ const DrivingSimulator = () => {
           gameStartedRef.current = true;
           setGameStarted(true);
           startTimeRef.current = Date.now();
+          lastScoreDeductionRef.current = startTimeRef.current; // Initialize to start time
           scoreRef.current = 1000;
           setScore(1000);
           if (countdownIntervalRef.current) {
@@ -344,7 +348,6 @@ const DrivingSimulator = () => {
     // No keyboard controls - always in Copilot mode
 
     // Timer - only start when game begins
-    let lastScoreDeduction = 0;
     let lastSecondLogged = -1;
     
     const ensureModeByUnitComplete = () => {
@@ -355,6 +358,21 @@ const DrivingSimulator = () => {
       }
       lastDistanceUnitLoggedRef.current = TRACK_LENGTH;
     };
+    
+    // Handle tab visibility changes to prevent score pausing
+    // Note: The interval's score deduction will handle catching up properly
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        // Tab just became hidden - record the time
+        lastTabHiddenTimeRef.current = Date.now();
+      } else if (lastTabHiddenTimeRef.current && startTimeRef.current) {
+        // Tab just became visible - the interval will catch up on score deduction
+        // We just need to reset the tracking
+        lastTabHiddenTimeRef.current = null;
+      }
+    };
+    // Add visibility change listener
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     
     const timerInterval = setInterval(() => {
       if (!startTimeRef.current || !gameStartedRef.current || isCompleteRef.current) return;
@@ -372,14 +390,25 @@ const DrivingSimulator = () => {
       }
       
       // Time-based score deduction: -10 points per second
+      // This catches up on all missed seconds, even if the interval was throttled
       const now = Date.now();
-      if (lastScoreDeduction === 0) {
-        lastScoreDeduction = now;
+      if (lastScoreDeductionRef.current === 0 && startTimeRef.current) {
+        // Initialize to start time to prevent massive catch-up on first run
+        lastScoreDeductionRef.current = startTimeRef.current;
+        return; // Skip deduction on first initialization
       }
-      if (now - lastScoreDeduction >= 1000) {
-        scoreRef.current = Math.max(0, scoreRef.current - 10);
+      if (lastScoreDeductionRef.current === 0) {
+        return; // Don't deduct if not initialized yet
+      }
+      const timeSinceLastDeduction = now - lastScoreDeductionRef.current;
+      if (timeSinceLastDeduction >= 1000) {
+        // Calculate how many seconds have passed (catch up on all missed seconds)
+        const secondsPassed = Math.floor(timeSinceLastDeduction / 1000);
+        const pointsToDeduct = 10 * secondsPassed;
+        scoreRef.current = Math.max(0, scoreRef.current - pointsToDeduct);
         setScore(scoreRef.current);
-        lastScoreDeduction = now;
+        // Update lastScoreDeduction to the last second boundary
+        lastScoreDeductionRef.current = now - (timeSinceLastDeduction % 1000);
       }
       
       // Check for completion at 45 seconds
@@ -839,6 +868,7 @@ const DrivingSimulator = () => {
         cancelAnimationFrame(animationId);
       }
       window.removeEventListener('resize', handleResize);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       clearInterval(timerInterval);
       if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
       if (container && renderer.domElement && container.contains(renderer.domElement)) {
@@ -957,7 +987,7 @@ const DrivingSimulator = () => {
               fontFamily: 'monospace',
               fontWeight: 'bold'
             }}>
-              ⏱ {Math.floor((45 - elapsedTime) / 60)}:{((45 - elapsedTime) % 60).toString().padStart(2, '0')}
+              ⏱ {Math.max(0, Math.floor((45 - elapsedTime) / 60))}:{Math.max(0, (45 - elapsedTime) % 60).toString().padStart(2, '0')}
             </div>
             <div style={{
               background: isAutopilot ? 'rgba(138, 43, 226, 0.25)' : 'rgba(0, 0, 0, 0.7)',
