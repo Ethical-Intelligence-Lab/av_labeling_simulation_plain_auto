@@ -1,13 +1,13 @@
 {
   "files": {
-    "main.css": "/av_labeling_simulation_plain_auto/static/css/main.e6c13ad2.css",
-    "main.js": "/av_labeling_simulation_plain_auto/static/js/main.4fe28f84.js",
+    "main.css": "/av_labeling_simulation_plain_auto/static/css/main.724361c8.css",
+    "main.js": "/av_labeling_simulation_plain_auto/static/js/main.e82d9818.js",
     "index.html": "/av_labeling_simulation_plain_auto/index.html",
-    "main.e6c13ad2.css.map": "/av_labeling_simulation_plain_auto/static/css/main.e6c13ad2.css.map",
-    "main.4fe28f84.js.map": "/av_labeling_simulation_plain_auto/static/js/main.4fe28f84.js.map"
+    "main.724361c8.css.map": "/av_labeling_simulation_plain_auto/static/css/main.724361c8.css.map",
+    "main.e82d9818.js.map": "/av_labeling_simulation_plain_auto/static/js/main.e82d9818.js.map"
   },
   "entrypoints": [
-    "static/css/main.e6c13ad2.css",
-    "static/js/main.4fe28f84.js"
+    "static/css/main.724361c8.css",
+    "static/js/main.e82d9818.js"
   ]
 }
